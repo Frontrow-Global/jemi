@@ -85,7 +85,8 @@ void jemi_reset(void) {
     memset(s_jemi_pool, 0, s_jemi_pool_size * sizeof(jemi_node_t));
     // rebuild the freelist, using node->sibling as the link field
     jemi_node_t *next = NULL; // end of the linked list
-    for (int i = 0; i < s_jemi_pool_size; i++) {
+    int i;
+    for (i = 0; i < s_jemi_pool_size; i++) {
         jemi_node_t *node = &s_jemi_pool[i];
         node->sibling = next;
         next = node;
