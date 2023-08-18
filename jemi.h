@@ -51,6 +51,8 @@ extern "C" {
 
 #define JEMI_VERSION "1.3.0"
 
+#define OUT_BUF_LEN 100
+
 typedef enum {
     JEMI_OBJECT,
     JEMI_ARRAY,
@@ -62,9 +64,17 @@ typedef enum {
     JEMI_NULL
 } jemi_type_t;
 
+enum {
+    NODE_NOT_USED,
+    NODE_IN_USE,
+    NODE_VAL_USED,
+    NODE_DONE
+};
+
 typedef struct _jemi_node {
     struct _jemi_node *sibling; // any object may have siblings...
     jemi_type_t type;
+    int state;
     union {
         struct _jemi_node *children; // for JEMI_ARRAY or JEMI_OBJECT
         double number;               // for JEMI_FLOAT
