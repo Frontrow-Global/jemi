@@ -66,6 +66,7 @@ typedef enum {
 
 enum {
     NODE_NOT_USED,
+    NODE_SEPARATOR_WRITTEN,
     NODE_IN_USE,
     NODE_VAL_USED,
     NODE_DONE

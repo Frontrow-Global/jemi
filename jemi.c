@@ -301,23 +301,29 @@ static jemi_node_t *jemi_alloc(jemi_type_t type) {
 static bool emit_aux(jemi_node_t *root, jemi_writer_t writer_fn, void *arg,
                      bool is_obj) {
     int count = 0;
-    bool writeSeparators = false;
     jemi_node_t *node = root;
     while (node) {
 
-        if (node->state != NODE_DONE) {
+        if (NODE_DONE != node->state) {
 
             if (strlen((char*)arg) >= (OUT_BUF_LEN - 1)) return 1;
 
+            if (NODE_NOT_USED == node->state){
                 if (is_obj && (count & 1)) {
                     writer_fn(':', arg);
+                    node->state = NODE_SEPARATOR_WRITTEN;
                 } else if (count > 0) {
                     writer_fn(',', arg);
+                    node->state = NODE_SEPARATOR_WRITTEN;
+                } else {
+                    // first time no separator is needed
+                    node->state = NODE_SEPARATOR_WRITTEN;
                 }
+            }
 
             switch (node->type) {
                 case JEMI_OBJECT: {
-                    if (NODE_NOT_USED == node->state) {
+                    if (NODE_SEPARATOR_WRITTEN == node->state) {
 
                         if (strlen((char*)arg) >= (OUT_BUF_LEN - 1)) return 1;
 
@@ -340,7 +346,7 @@ static bool emit_aux(jemi_node_t *root, jemi_writer_t writer_fn, void *arg,
                 } break;
 
                 case JEMI_ARRAY: {
-                    if (NODE_NOT_USED == node->state) {
+                    if (NODE_SEPARATOR_WRITTEN == node->state) {
 
                         if (strlen((char*)arg) >= (OUT_BUF_LEN - 1)) return 1;
 
@@ -382,7 +388,7 @@ static bool emit_aux(jemi_node_t *root, jemi_writer_t writer_fn, void *arg,
                 } break;
 
                 case JEMI_STRING: {
-                    if (NODE_NOT_USED == node->state) {
+                    if (NODE_SEPARATOR_WRITTEN == node->state) {
 
                         if (strlen((char*)arg) >= (OUT_BUF_LEN - 1)) return 1;
 
