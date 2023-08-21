@@ -51,8 +51,6 @@ extern "C" {
 
 #define JEMI_VERSION "1.3.0"
 
-#define OUT_BUF_LEN 100
-
 typedef enum {
     JEMI_OBJECT,
     JEMI_ARRAY,
@@ -83,6 +81,11 @@ typedef struct _jemi_node {
         const char *string;          // for JEMI_STRING
     };
 } jemi_node_t;
+
+typedef struct jemi_out_buf_t {
+    char *data;
+    uint16_t bufLen;
+} jemi_out_buf_t;
 
 /**
  * @brief Signature for the user-supplied jemi_emit function: it will be called
@@ -248,7 +251,7 @@ jemi_node_t *jemi_bool_set(jemi_node_t *node, bool boolean);
  * @param writer writer function wich char and user context args
  * @param user-supplied context
  */
-void jemi_emit(jemi_node_t *root, jemi_writer_t writer_fn, void *arg);
+bool jemi_emit(jemi_node_t *root, jemi_writer_t writer_fn, jemi_out_buf_t *output);
 
 /**
  * @brief Return the number of available jemi_node objects.

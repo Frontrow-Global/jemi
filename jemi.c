@@ -58,7 +58,7 @@ static jemi_node_t *jemi_alloc(jemi_type_t type);
 /**
  * @brief Print a node or a list of nodes.
  */
-static bool emit_aux(jemi_node_t *root, jemi_writer_t writer_fn, void *arg,
+static bool emit_aux(jemi_node_t *root, jemi_writer_t writer_fn, jemi_out_buf_t *output,
                      bool is_obj);
 
 /**
@@ -70,7 +70,7 @@ static jemi_node_t *copy_node(jemi_node_t *node);
 /**
  * @brief Write a string to the writer_fn, a byte at a time.
  */
-static bool emit_string(jemi_writer_t writer_fn, void *arg, const char *buf);
+static bool emit_string(jemi_writer_t writer_fn, jemi_out_buf_t *output, const char *buf);
 
 // *****************************************************************************
 // Public code
@@ -267,9 +267,11 @@ jemi_node_t *jemi_bool_set(jemi_node_t *node, bool boolean) {
     return node;
 }
 
-void jemi_emit(jemi_node_t *root, jemi_writer_t writer_fn, void *arg) {
-    emit_aux(root, writer_fn, arg, false);
-    writer_fn('\0', arg);
+bool jemi_emit(jemi_node_t *root, jemi_writer_t writer_fn, jemi_out_buf_t *output) {
+    bool err = emit_aux(root, writer_fn, output, false);
+    writer_fn('\0', output->data);
+
+    return err;
 }
 
 size_t jemi_available(void) {
@@ -298,7 +300,7 @@ static jemi_node_t *jemi_alloc(jemi_type_t type) {
     return node;
 }
 
-static bool emit_aux(jemi_node_t *root, jemi_writer_t writer_fn, void *arg,
+static bool emit_aux(jemi_node_t *root, jemi_writer_t writer_fn, jemi_out_buf_t *output,
                      bool is_obj) {
     int count = 0;
     jemi_node_t *node = root;
@@ -306,14 +308,14 @@ static bool emit_aux(jemi_node_t *root, jemi_writer_t writer_fn, void *arg,
 
         if (NODE_DONE != node->state) {
 
-            if (strlen((char*)arg) >= (OUT_BUF_LEN - 1)) return 1;
+            if (strlen(output->data) >= (output->bufLen - 1)) return 1;
 
             if (NODE_NOT_USED == node->state){
                 if (is_obj && (count & 1)) {
-                    writer_fn(':', arg);
+                    writer_fn(':', output->data);
                     node->state = NODE_SEPARATOR_WRITTEN;
                 } else if (count > 0) {
-                    writer_fn(',', arg);
+                    writer_fn(',', output->data);
                     node->state = NODE_SEPARATOR_WRITTEN;
                 } else {
                     // first time no separator is needed
@@ -325,22 +327,22 @@ static bool emit_aux(jemi_node_t *root, jemi_writer_t writer_fn, void *arg,
                 case JEMI_OBJECT: {
                     if (NODE_SEPARATOR_WRITTEN == node->state) {
 
-                        if (strlen((char*)arg) >= (OUT_BUF_LEN - 1)) return 1;
+                        if (strlen(output->data) >= (output->bufLen - 1)) return 1;
 
-                        writer_fn('{', arg);
+                        writer_fn('{', output->data);
                         node->state = NODE_IN_USE;
                     }
 
                     if (NODE_IN_USE == node->state) {
-                        bool err = emit_aux(node->children, writer_fn, arg, true);
+                        bool err = emit_aux(node->children, writer_fn, output, true);
                         if (!err) node->state = NODE_VAL_USED;
                     }
 
                     if (NODE_VAL_USED == node->state) {
 
-                        if (strlen((char*)arg) >= (OUT_BUF_LEN - 1)) return 1;
+                        if (strlen(output->data) >= (output->bufLen - 1)) return 1;
 
-                        writer_fn('}', arg);
+                        writer_fn('}', output->data);
                         node->state = NODE_DONE;
                     }
                 } break;
@@ -348,21 +350,21 @@ static bool emit_aux(jemi_node_t *root, jemi_writer_t writer_fn, void *arg,
                 case JEMI_ARRAY: {
                     if (NODE_SEPARATOR_WRITTEN == node->state) {
 
-                        if (strlen((char*)arg) >= (OUT_BUF_LEN - 1)) return 1;
+                        if (strlen(output->data) >= (output->bufLen - 1)) return 1;
 
-                        writer_fn('[', arg);
+                        writer_fn('[', output->data);
                         node->state = NODE_IN_USE;
                     }
 
                     if (NODE_IN_USE == node->state) {
-                        bool err = emit_aux(node->children, writer_fn, arg, false);
+                        bool err = emit_aux(node->children, writer_fn, output, false);
                         if (!err) node->state = NODE_VAL_USED;
                     }
 
                     if (NODE_VAL_USED == node->state) {
 
-                        if (strlen((char*)arg) >= (OUT_BUF_LEN - 1)) return 1;
-                        writer_fn(']', arg);
+                        if (strlen(output->data) >= (output->bufLen - 1)) return 1;
+                        writer_fn(']', output->data);
                         node->state = NODE_DONE;
                     }
                 } break;
@@ -376,51 +378,51 @@ static bool emit_aux(jemi_node_t *root, jemi_writer_t writer_fn, void *arg,
                     } else {
                         snprintf(buf, sizeof(buf), "%lf", node->number);
                     }
-                    bool err = emit_string(writer_fn, arg, buf);
+                    bool err = emit_string(writer_fn, output, buf);
                     if (!err) node->state = NODE_DONE;
                 } break;
 
                 case JEMI_INTEGER: {
                     char buf[22]; // 20 digits, 1 sign, 1 null
                     snprintf(buf, sizeof(buf), "%ld", node->integer);
-                    bool err = emit_string(writer_fn, arg, buf);
+                    bool err = emit_string(writer_fn, output, buf);
                     if (!err) node->state = NODE_DONE;
                 } break;
 
                 case JEMI_STRING: {
                     if (NODE_SEPARATOR_WRITTEN == node->state) {
 
-                        if (strlen((char*)arg) >= (OUT_BUF_LEN - 1)) return 1;
+                        if (strlen(output->data) >= (output->bufLen - 1)) return 1;
 
-                        writer_fn('"', arg);
+                        writer_fn('"', output->data);
                         node->state = NODE_IN_USE;
                     }
 
                     if (NODE_IN_USE == node->state) {
-                        bool err = emit_string(writer_fn, arg, node->string);
+                        bool err = emit_string(writer_fn, output, node->string);
                         if (!err) node->state = NODE_VAL_USED;
                     }
 
                     if (NODE_VAL_USED == node->state) {
 
-                        if (strlen((char*)arg) >= (OUT_BUF_LEN - 1)) return 1;
-                        writer_fn('"', arg);
+                        if (strlen(output->data) >= (output->bufLen - 1)) return 1;
+                        writer_fn('"', output->data);
                         node->state = NODE_DONE;
                     }
                 } break;
 
                 case JEMI_TRUE: {
-                    bool err = emit_string(writer_fn, arg, "true");
+                    bool err = emit_string(writer_fn, output, "true");
                     if (!err) node->state = NODE_DONE;
                 } break;
 
                 case JEMI_FALSE: {
-                    bool err = emit_string(writer_fn, arg, "false");
+                    bool err = emit_string(writer_fn, output, "false");
                     if (!err) node->state = NODE_DONE;
                 } break;
 
                 case JEMI_NULL: {
-                    bool err = emit_string(writer_fn, arg, "null");
+                    bool err = emit_string(writer_fn, output, "null");
                     if (!err) node->state = NODE_DONE;
                 } break;
             }
@@ -468,22 +470,20 @@ static jemi_node_t *copy_node(jemi_node_t *node) {
     return copy;
 }
 
-static bool emit_string(jemi_writer_t writer_fn, void *arg, const char *buf) {
+static bool emit_string(jemi_writer_t writer_fn, jemi_out_buf_t *output, const char *data) {
 
-    if (arg) {
-        int currOutputLen, nodeDataLen;
-        currOutputLen = strlen((char *)arg);
-        nodeDataLen = strlen(buf);
+    int currOutputLen, nodeDataLen;
+    currOutputLen = strlen(output->data);
+    nodeDataLen = strlen(data);
 
-        // printf("OutputLen: %d, DataLen: %d, OutBuf: %d, Data: %s \n", currOutputLen, nodeDataLen, OUT_BUF_LEN, buf);
+    // printf("OutputLen: %d, DataLen: %d, OutBuf: %d, Data: %s \n", currOutputLen, nodeDataLen, output->length, buf);
 
-        if ((currOutputLen + nodeDataLen) > (OUT_BUF_LEN - 1)) {
-            return 1;
-        }
+    if ((currOutputLen + nodeDataLen) > (output->bufLen - 1)) {
+        return 1;
     }
 
-    while (*buf) {
-        writer_fn(*buf++, arg);
+    while (*data) {
+        writer_fn(*data++, output->data);
     }
     return 0;
 }
