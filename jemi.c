@@ -374,7 +374,7 @@ static bool emit_aux(jemi_node_t *root, jemi_writer_t writer_fn, jemi_out_buf_t 
                     int64_t i = node->number;
                     if ((double)i == node->number) {
                         // number can be represented as an int: suppress trailing zeros
-                        snprintf(buf, sizeof(buf), "%ld", i);
+                        snprintf(buf, sizeof(buf), "%lld", i);
                     } else {
                         snprintf(buf, sizeof(buf), "%lf", node->number);
                     }
@@ -384,7 +384,7 @@ static bool emit_aux(jemi_node_t *root, jemi_writer_t writer_fn, jemi_out_buf_t 
 
                 case JEMI_INTEGER: {
                     char buf[22]; // 20 digits, 1 sign, 1 null
-                    snprintf(buf, sizeof(buf), "%ld", node->integer);
+                    snprintf(buf, sizeof(buf), "%lld", node->integer);
                     bool err = emit_string(writer_fn, output, buf);
                     if (!err) node->state = NODE_DONE;
                 } break;
