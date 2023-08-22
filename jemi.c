@@ -476,8 +476,6 @@ static bool emit_string(jemi_writer_t writer_fn, jemi_out_buf_t *output, const c
     currOutputLen = strlen(output->data);
     nodeDataLen = strlen(data);
 
-    // printf("OutputLen: %d, DataLen: %d, OutBuf: %d, Data: %s \n", currOutputLen, nodeDataLen, output->length, buf);
-
     if ((currOutputLen + nodeDataLen) > (output->bufLen - 1)) {
         return 1;
     }
