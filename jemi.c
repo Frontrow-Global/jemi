@@ -104,6 +104,7 @@ jemi_node_t *jemi_array(jemi_node_t *element, ...) {
         element->sibling = va_arg(ap, jemi_node_t *);
         element = element->sibling;
     }
+    va_end(ap);
     return root;
 }
 
@@ -117,6 +118,7 @@ jemi_node_t *jemi_object(jemi_node_t *element, ...) {
         element->sibling = va_arg(ap, jemi_node_t *);
         element = element->sibling;
     }
+    va_end(ap);
     return root;
 }
 
@@ -129,6 +131,7 @@ jemi_node_t *jemi_list(jemi_node_t *element, ...) {
         element->sibling = va_arg(ap, jemi_node_t *);
         element = element->sibling;
     }
+    va_end(ap);
     return first;
 }
 
