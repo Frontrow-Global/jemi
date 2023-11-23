@@ -49,42 +49,47 @@ extern "C" {
 // *****************************************************************************
 // Public types and definitions
 
-#define JEMI_VERSION "1.3.0"
+#define JEMI_VERSION "1.3.0-FR"
 
 typedef enum {
+    JEMI_NULL,
     JEMI_OBJECT,
     JEMI_ARRAY,
-    JEMI_FLOAT,
     JEMI_INTEGER,
+    JEMI_FLOAT,
     JEMI_STRING,
-    JEMI_TRUE,
-    JEMI_FALSE,
-    JEMI_NULL
+    JEMI_BOOL,
+    JEMI_TRUE, // used as the actual boolean value
+    JEMI_FALSE
 } jemi_type_t;
 
-enum {
-    NODE_NOT_USED,
-    NODE_SEPARATOR_WRITTEN,
-    NODE_IN_USE,
-    NODE_VAL_USED,
-    NODE_DONE
-};
+typedef enum {
+    JEMI_NODE_UNUSED,
+    JEMI_CONTAINER_BEGUN,
+    JEMI_KEY_USED,
+    JEMI_VAL_USED,
+    JEMI_CHILDREN_USED,
+    JEMI_NODE_USED
+} jemi_state_t; // For keeping track of written and non-written nodes
 
 typedef struct _jemi_node {
     struct _jemi_node *sibling; // any object may have siblings...
+    struct _jemi_node *parent;  // any object may have a parent object...
     jemi_type_t type;
-    int state;
+    jemi_state_t state;
+    const char *key;
     union {
-        struct _jemi_node *children; // for JEMI_ARRAY or JEMI_OBJECT
-        double number;               // for JEMI_FLOAT
-        int64_t integer;             // for JEMI_INTEGER
+        int integer;            // for JEMI_INTEGER
+        double number;
         const char *string;          // for JEMI_STRING
+        struct _jemi_node *children; // for JEMI_ARRAY or JEMI_OBJECT
     };
 } jemi_node_t;
 
 typedef struct jemi_out_buf_t {
-    char *data;
+    char *buf;
     uint16_t bufLen;
+    bool full;
 } jemi_out_buf_t;
 
 /**
@@ -106,17 +111,12 @@ typedef void (*jemi_writer_t)(char ch, void *arg);
  *     #define JEMI_POOL_SIZE 30  // maximum number of nodes we expect to create
  *     static jemi_node_t jemi_pool[JEMI_POOL_SIZE];
  *
- *     jemi_init(jemi_pool, JEMI_POOL_SIZE)
+ *     jemi_reset(jemi_pool, JEMI_POOL_SIZE)
  *
  * @param pool User-supplied vector of jemi_node objects.
  * @param pool_size Number of jemi_node objects in the pool.
  */
-void jemi_init(jemi_node_t *pool, size_t pool_size);
-
-/**
- * @brief Release all jemi_node objects back to the pool.
- */
-void jemi_reset(void);
+void jemi_reset(jemi_node_t *pool, size_t pool_size);
 
 // ******************************
 // Creating JSON elements
@@ -128,7 +128,7 @@ void jemi_reset(void);
  * create an array of zero elements (e.g. for subsequent calls to
  * `jemi_array_append()`), use the construct `jemi_array(NULL)`.
  */
-jemi_node_t *jemi_array(jemi_node_t *element, ...);
+jemi_node_t *jemi_array(const char *key, jemi_node_t *element, ...);
 
 /**
  * @brief Create a JSON object with zero or more key/value sub-elements.
@@ -137,7 +137,7 @@ jemi_node_t *jemi_array(jemi_node_t *element, ...);
  * create an object of zero elements (e.g. for subsequent calls to
  * `jemi_object_append()`), use the construct `jemi_object(NULL)`.
  */
-jemi_node_t *jemi_object(jemi_node_t *element, ...);
+jemi_node_t *jemi_object(const char *key, jemi_node_t *element, ...);
 
 /**
  * @brief Create a "disembodied list" of zero or more elements which are not
@@ -156,19 +156,19 @@ jemi_node_t *jemi_float(double value);
  * @brief Create a JSON integer.  If your value is an integer, this will render
  * more compactly than using jemi_float().
  */
-jemi_node_t *jemi_integer(int64_t value);
+jemi_node_t *jemi_integer(const char *key, int integer);
 
 /**
  * @brief Create a JSON string.
  *
  * NOTE: string must be null-terminated.
  */
-jemi_node_t *jemi_string(const char *string);
+jemi_node_t *jemi_string(const char *key, const char *string);
 
 /**
  * @brief Create a JSON boolean (true or false).
  */
-jemi_node_t *jemi_bool(bool boolean);
+jemi_node_t *jemi_bool(const char *key, bool boolean);
 
 /**
  * @brief Create a JSON true object.
@@ -251,7 +251,7 @@ jemi_node_t *jemi_bool_set(jemi_node_t *node, bool boolean);
  * @param writer writer function wich char and user context args
  * @param user-supplied context
  */
-bool jemi_emit(jemi_node_t *root, jemi_writer_t writer_fn, jemi_out_buf_t *output);
+jemi_node_t *jemi_emit(jemi_node_t *root, jemi_writer_t writer_fn, jemi_out_buf_t *output);
 
 /**
  * @brief Return the number of available jemi_node objects.

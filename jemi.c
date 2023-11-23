@@ -42,8 +42,6 @@
 // *****************************************************************************
 // Private (static) storage
 
-jemi_node_t *s_jemi_pool;     // user supplied block of nodes
-size_t s_jemi_pool_size;      // number of user-supplied nodes
 jemi_node_t *s_jemi_freelist; // next available node (or null if empty)
 
 // *****************************************************************************
@@ -58,8 +56,7 @@ static jemi_node_t *jemi_alloc(jemi_type_t type);
 /**
  * @brief Print a node or a list of nodes.
  */
-static bool emit_aux(jemi_node_t *root, jemi_writer_t writer_fn, jemi_out_buf_t *output,
-                     bool is_obj);
+static jemi_node_t *emit_aux(jemi_node_t *node, jemi_writer_t writer_fn, jemi_out_buf_t *output);
 
 /**
  * @brief Make a copy of a node and its contents, including children nodes,
@@ -75,47 +72,51 @@ static bool emit_string(jemi_writer_t writer_fn, jemi_out_buf_t *output, const c
 // *****************************************************************************
 // Public code
 
-void jemi_init(jemi_node_t *pool, size_t pool_size) {
-    s_jemi_pool = pool;
-    s_jemi_pool_size = pool_size;
-    jemi_reset();
-}
-
-void jemi_reset(void) {
-    memset(s_jemi_pool, 0, s_jemi_pool_size * sizeof(jemi_node_t));
+void jemi_reset(jemi_node_t *pool, size_t pool_size) {
+    memset(pool, 0, pool_size * sizeof(jemi_node_t));
     // rebuild the freelist, using node->sibling as the link field
     jemi_node_t *next = NULL; // end of the linked list
+
     int i;
-    for (i = 0; i < s_jemi_pool_size; i++) {
-        jemi_node_t *node = &s_jemi_pool[i];
+    for (i = 0; i < pool_size; i++) {
+        jemi_node_t *node = &pool[i];
+
         node->sibling = next;
         next = node;
     }
     s_jemi_freelist = next; // reset head of the freelist
 }
 
-jemi_node_t *jemi_array(jemi_node_t *element, ...) {
+jemi_node_t *jemi_array(const char *key, jemi_node_t *element, ...) {
     va_list ap;
     jemi_node_t *root = jemi_alloc(JEMI_ARRAY);
+
+    root->key = key;
 
     va_start(ap, element);
     root->children = element;
     while (element != NULL) {
         element->sibling = va_arg(ap, jemi_node_t *);
+        element->parent = root;
+
         element = element->sibling;
     }
     va_end(ap);
     return root;
 }
 
-jemi_node_t *jemi_object(jemi_node_t *element, ...) {
+jemi_node_t *jemi_object(const char *key, jemi_node_t *element, ...) {
     va_list ap;
     jemi_node_t *root = jemi_alloc(JEMI_OBJECT);
+
+    root->key = key;
 
     va_start(ap, element);
     root->children = element;
     while (element != NULL) {
         element->sibling = va_arg(ap, jemi_node_t *);
+        element->parent = root;
+
         element = element->sibling;
     }
     va_end(ap);
@@ -135,36 +136,32 @@ jemi_node_t *jemi_list(jemi_node_t *element, ...) {
     return first;
 }
 
-jemi_node_t *jemi_float(double value) {
-    jemi_node_t *node = jemi_alloc(JEMI_FLOAT);
-    if (node) {
-        node->number = value;
-    }
-    return node;
-}
-
-jemi_node_t *jemi_integer(int64_t value) {
+jemi_node_t *jemi_integer(const char *key, int integer) {
     jemi_node_t *node = jemi_alloc(JEMI_INTEGER);
     if (node) {
-        node->integer = value;
+        node->key = key;
+        node->integer = integer;
     }
     return node;
 }
 
-jemi_node_t *jemi_string(const char *string) {
+jemi_node_t *jemi_string(const char *key, const char *string) {
     jemi_node_t *node = jemi_alloc(JEMI_STRING);
     if (node) {
+        node->key = key;
         node->string = string;
     }
     return node;
 }
 
-jemi_node_t *jemi_bool(bool boolean) {
+jemi_node_t *jemi_bool(const char *key, bool boolean) {
+    jemi_node_t *node;
     if (boolean) {
-        return jemi_true();
+        node = jemi_true();
     } else {
-        return jemi_false();
+        node = jemi_false();
     }
+    node->key = key;
 }
 
 jemi_node_t *jemi_true(void) { return jemi_alloc(JEMI_TRUE); }
@@ -193,6 +190,8 @@ jemi_node_t *jemi_copy(jemi_node_t *root) {
 }
 
 jemi_node_t *jemi_array_append(jemi_node_t *array, jemi_node_t *items) {
+    items->parent = array;
+
     if (array) {
         array->children = jemi_list_append(array->children, items);
     }
@@ -200,17 +199,10 @@ jemi_node_t *jemi_array_append(jemi_node_t *array, jemi_node_t *items) {
 }
 
 jemi_node_t *jemi_object_append(jemi_node_t *object, jemi_node_t *items) {
+    items->parent = object;
+
     if (object) {
         object->children = jemi_list_append(object->children, items);
-    }
-    return object;
-}
-
-jemi_node_t *jemi_object_add_keyval(jemi_node_t *object, const char *key,
-                                    jemi_node_t *value) {
-    if (object) {
-        object->children = jemi_list_append(
-            object->children, jemi_list(jemi_string(key), value, NULL));
     }
     return object;
 }
@@ -270,11 +262,18 @@ jemi_node_t *jemi_bool_set(jemi_node_t *node, bool boolean) {
     return node;
 }
 
-bool jemi_emit(jemi_node_t *root, jemi_writer_t writer_fn, jemi_out_buf_t *output) {
-    bool err = emit_aux(root, writer_fn, output, false);
-    writer_fn('\0', output->data);
+jemi_node_t *jemi_emit(jemi_node_t *root, jemi_writer_t writer_fn, jemi_out_buf_t *output) {
 
-    return err;
+    jemi_node_t *next_node = root;
+
+    do {
+        next_node = emit_aux(next_node, writer_fn, output);
+
+    } while (NULL != next_node && false == output->full);
+
+    writer_fn('\0', output->buf);
+
+    return next_node;
 }
 
 size_t jemi_available(void) {
@@ -298,151 +297,246 @@ static jemi_node_t *jemi_alloc(jemi_type_t type) {
         s_jemi_freelist = node->sibling;
         node->sibling = NULL;
         node->type = type;
-        node->state = NODE_NOT_USED;
+        node->state = JEMI_NODE_UNUSED;
     }
     return node;
 }
 
-static bool emit_aux(jemi_node_t *root, jemi_writer_t writer_fn, jemi_out_buf_t *output,
-                     bool is_obj) {
-    int count = 0;
-    jemi_node_t *node = root;
-    while (node) {
+static jemi_node_t *emit_aux(jemi_node_t *node, jemi_writer_t writer_fn, jemi_out_buf_t *output) {
 
-        if (NODE_DONE != node->state) {
+    switch (node->type) {
 
-            if (strlen(output->data) >= (output->bufLen - 1)) return 1;
-
-            if (NODE_NOT_USED == node->state){
-                if (is_obj && (count & 1)) {
-                    writer_fn(':', output->data);
-                    node->state = NODE_SEPARATOR_WRITTEN;
-                } else if (count > 0) {
-                    writer_fn(',', output->data);
-                    node->state = NODE_SEPARATOR_WRITTEN;
+        case JEMI_OBJECT: {
+            if (JEMI_NODE_UNUSED == node->state) {
+                if (node->key) {
+                    char buf[22];
+                    snprintf(buf, sizeof(buf), "\"%s\":", node->key);
+                    if (!emit_string(writer_fn, output, buf))
+                        node->state = JEMI_KEY_USED;
                 } else {
-                    // first time no separator is needed
-                    node->state = NODE_SEPARATOR_WRITTEN;
+                    node->state = JEMI_KEY_USED;
+                }
+            }
+            if (JEMI_KEY_USED == node->state) {
+                if(!emit_string(writer_fn, output, "{"))
+                    node->state = JEMI_CONTAINER_BEGUN;
+            }
+            if (JEMI_CONTAINER_BEGUN == node->state) {
+                node->state = JEMI_CHILDREN_USED;
+                return node->children;
+            }
+            if (JEMI_CHILDREN_USED == node->state) {
+                char buf[3];
+                if (node->sibling) {
+                    snprintf(buf, sizeof(buf), "},");
+                } else {
+                    snprintf(buf, sizeof(buf), "}");
+                }
+
+                if(!emit_string(writer_fn, output, buf))
+                    node->state = JEMI_NODE_USED;
+            }
+        } break;
+
+        case JEMI_ARRAY: {
+            if (JEMI_NODE_UNUSED == node->state) {
+                if (node->key) {
+                    char buf[22];
+                    snprintf(buf, sizeof(buf), "\"%s\":", node->key);
+                    if (!emit_string(writer_fn, output, buf))
+                        node->state = JEMI_KEY_USED;
+                } else {
+                    node->state = JEMI_KEY_USED;
+                }
+            }
+            if (JEMI_KEY_USED == node->state) {
+                if(!emit_string(writer_fn, output, "["))
+                    node->state = JEMI_CONTAINER_BEGUN;
+            }
+            if (JEMI_CONTAINER_BEGUN == node->state) {
+                node->state = JEMI_CHILDREN_USED;
+                return node->children;
+            }
+            if (JEMI_CHILDREN_USED == node->state) {
+                char buf[3];
+                if (node->sibling) {
+                    snprintf(buf, sizeof(buf), "],");
+                } else {
+                    snprintf(buf, sizeof(buf), "]");
+                }
+
+                if(!emit_string(writer_fn, output, buf))
+                    node->state = JEMI_NODE_USED;
+            }
+        } break;
+
+        case JEMI_INTEGER: {
+            char buf[22];
+
+            if (JEMI_NODE_UNUSED == node->state) {
+                if (node->key) {
+                    snprintf(buf, sizeof(buf), "\"%s\":", node->key);
+                    if(!emit_string(writer_fn, output, buf))
+                        node->state = JEMI_KEY_USED;
+                } else {
+                    node->state = JEMI_KEY_USED;
                 }
             }
 
-            switch (node->type) {
-                case JEMI_OBJECT: {
-                    if (NODE_SEPARATOR_WRITTEN == node->state) {
+            if (JEMI_KEY_USED == node->state) {
+                snprintf(buf, sizeof(buf), "%d", node->integer);
+                if(!emit_string(writer_fn, output, buf))
+                    node->state = JEMI_VAL_USED;
+            }
 
-                        if (strlen(output->data) >= (output->bufLen - 1)) return 1;
+            if (JEMI_VAL_USED == node->state) {
 
-                        writer_fn('{', output->data);
-                        node->state = NODE_IN_USE;
-                    }
+                if (node->sibling) {
+                    if (!emit_string(writer_fn, output, ","))
+                        node->state = JEMI_NODE_USED;
+                } else {
+                    node->state = JEMI_NODE_USED;
+                }
+            }
+        } break;
 
-                    if (NODE_IN_USE == node->state) {
-                        bool err = emit_aux(node->children, writer_fn, output, true);
-                        if (!err) node->state = NODE_VAL_USED;
-                    }
+        case JEMI_FLOAT: {
+            char buf[22];
 
-                    if (NODE_VAL_USED == node->state) {
+            if (JEMI_NODE_UNUSED == node->state) {
+                if (node->key) {
+                    snprintf(buf, sizeof(buf), "\"%s\":", node->key);
+                    if(!emit_string(writer_fn, output, buf))
+                        node->state = JEMI_KEY_USED;
+                } else {
+                    node->state = JEMI_KEY_USED;
+                }
+            }
 
-                        if (strlen(output->data) >= (output->bufLen - 1)) return 1;
+            if (JEMI_KEY_USED == node->state) {
+                int i = node->number;
+                if((double)i == node->number) {
+                    // number can be represented as an int: supress trailing zeros
+                    snprintf(buf, sizeof(buf), "%d", i);
+                } else {
+                    snprintf(buf, sizeof(buf), "%lf", node->number);
+                }
+                if(!emit_string(writer_fn, output, buf))
+                    node->state = JEMI_VAL_USED;
+            }
 
-                        writer_fn('}', output->data);
-                        node->state = NODE_DONE;
-                    }
-                } break;
+            if (JEMI_VAL_USED == node->state) {
 
-                case JEMI_ARRAY: {
-                    if (NODE_SEPARATOR_WRITTEN == node->state) {
-
-                        if (strlen(output->data) >= (output->bufLen - 1)) return 1;
-
-                        writer_fn('[', output->data);
-                        node->state = NODE_IN_USE;
-                    }
-
-                    if (NODE_IN_USE == node->state) {
-                        bool err = emit_aux(node->children, writer_fn, output, false);
-                        if (!err) node->state = NODE_VAL_USED;
-                    }
-
-                    if (NODE_VAL_USED == node->state) {
-
-                        if (strlen(output->data) >= (output->bufLen - 1)) return 1;
-                        writer_fn(']', output->data);
-                        node->state = NODE_DONE;
-                    }
-                } break;
-
-                case JEMI_FLOAT: {
-                    char buf[22];
-                    int64_t i = node->number;
-                    if ((double)i == node->number) {
-                        // number can be represented as an int: suppress trailing zeros
-                        snprintf(buf, sizeof(buf), "%lld", i);
-                    } else {
-                        snprintf(buf, sizeof(buf), "%lf", node->number);
-                    }
-                    bool err = emit_string(writer_fn, output, buf);
-                    if (!err) node->state = NODE_DONE;
-                } break;
-
-                case JEMI_INTEGER: {
-                    char buf[22]; // 20 digits, 1 sign, 1 null
-                    snprintf(buf, sizeof(buf), "%lld", node->integer);
-                    bool err = emit_string(writer_fn, output, buf);
-                    if (!err) node->state = NODE_DONE;
-                } break;
-
-                case JEMI_STRING: {
-                    if (NODE_SEPARATOR_WRITTEN == node->state) {
-
-                        if (strlen(output->data) >= (output->bufLen - 1)) return 1;
-
-                        writer_fn('"', output->data);
-                        node->state = NODE_IN_USE;
-                    }
-
-                    if (NODE_IN_USE == node->state) {
-                        bool err = emit_string(writer_fn, output, node->string);
-                        if (!err) node->state = NODE_VAL_USED;
-                    }
-
-                    if (NODE_VAL_USED == node->state) {
-
-                        if (strlen(output->data) >= (output->bufLen - 1)) return 1;
-                        writer_fn('"', output->data);
-                        node->state = NODE_DONE;
-                    }
-                } break;
-
-                case JEMI_TRUE: {
-                    bool err = emit_string(writer_fn, output, "true");
-                    if (!err) node->state = NODE_DONE;
-                } break;
-
-                case JEMI_FALSE: {
-                    bool err = emit_string(writer_fn, output, "false");
-                    if (!err) node->state = NODE_DONE;
-                } break;
-
-                case JEMI_NULL: {
-                    bool err = emit_string(writer_fn, output, "null");
-                    if (!err) node->state = NODE_DONE;
-                } break;
+                if (node->sibling) {
+                    if (!emit_string(writer_fn, output, ","))
+                        node->state = JEMI_NODE_USED;
+                } else {
+                    node->state = JEMI_NODE_USED;
+                }
             }
         }
-        ++count;
 
-        // If node not succesfully used, exit loop with "error"
-        if (node->state != NODE_DONE) {
-            return 1;
-        }
+        case JEMI_STRING: {
+            char buf[22];
 
-        // Select next node in the linked list
-        node = node->sibling;
+            if (JEMI_NODE_UNUSED == node->state) {
+                if (node->key) {
+                    snprintf(buf, sizeof(buf), "\"%s\":", node->key);
+                    if(!emit_string(writer_fn, output, buf))
+                        node->state = JEMI_KEY_USED;
+                } else {
+                    node->state = JEMI_KEY_USED;
+                }
+            }
+
+            if (JEMI_KEY_USED == node->state) {
+                snprintf(buf, sizeof(buf), "\"%s\"", node->string);
+                if(!emit_string(writer_fn, output, buf))
+                    node->state = JEMI_VAL_USED;
+            }
+
+            if (JEMI_VAL_USED == node->state) {
+
+                if (node->sibling) {
+                    if (!emit_string(writer_fn, output, ","))
+                        node->state = JEMI_NODE_USED;
+                } else {
+                    node->state = JEMI_NODE_USED;
+                }
+            }
+        } break;
+
+        case JEMI_TRUE:
+        case JEMI_FALSE: {
+            char buf[22];
+
+            if (JEMI_NODE_UNUSED == node->state) {
+                if (node->key) {
+                    snprintf(buf, sizeof(buf), "\"%s\":", node->key);
+                    if(!emit_string(writer_fn, output, buf))
+                        node->state = JEMI_KEY_USED;
+                } else {
+                    node->state = JEMI_KEY_USED;
+                }
+            }
+
+            if (JEMI_KEY_USED == node->state) {
+                if(!emit_string(writer_fn, output, JEMI_TRUE == node->state ? "true" : "false"))
+                    node->state = JEMI_VAL_USED;
+            }
+
+            if (JEMI_VAL_USED == node->state) {
+
+                if (node->sibling) {
+                    if (!emit_string(writer_fn, output, ","))
+                        node->state = JEMI_NODE_USED;
+                } else {
+                    node->state = JEMI_NODE_USED;
+                }
+            }
+        } break;
+
+        case JEMI_NULL: {
+            char buf[22];
+
+            if (JEMI_NODE_UNUSED == node->state) {
+                if (node->key) {
+                    snprintf(buf, sizeof(buf), "\"%s\":", node->key);
+                    if(!emit_string(writer_fn, output, buf))
+                        node->state = JEMI_KEY_USED;
+                } else {
+                    node->state = JEMI_KEY_USED;
+                }
+            }
+
+            if (JEMI_KEY_USED == node->state) {
+                if(!emit_string(writer_fn, output, "null"))
+                    node->state = JEMI_VAL_USED;
+            }
+
+            if (JEMI_VAL_USED == node->state) {
+
+                if (node->sibling) {
+                    if (!emit_string(writer_fn, output, ","))
+                        node->state = JEMI_NODE_USED;
+                } else {
+                    node->state = JEMI_NODE_USED;
+                }
+            }
+        } break;
     }
 
-    // Object or Array is done, return "no error"
-    return 0;
+    // If node not succesfully used
+    if (JEMI_NODE_USED != node->state) return node;
+
+    // If node has a sibling, return this
+    else if (node->sibling) return node->sibling;
+
+    // If node has a parent, return this
+    else if (node->parent) return node->parent;
+
+    // No more nodes in JSON schema, return NULL
+    return NULL;
 }
 
 static jemi_node_t *copy_node(jemi_node_t *node) {
@@ -459,9 +553,6 @@ static jemi_node_t *copy_node(jemi_node_t *node) {
         case JEMI_STRING: {
             copy->string = node->string;
         } break;
-        case JEMI_FLOAT: {
-            copy->number = node->number;
-        }
         case JEMI_INTEGER: {
             copy->integer = node->integer;
         }
@@ -475,16 +566,13 @@ static jemi_node_t *copy_node(jemi_node_t *node) {
 
 static bool emit_string(jemi_writer_t writer_fn, jemi_out_buf_t *output, const char *data) {
 
-    int currOutputLen, nodeDataLen;
-    currOutputLen = strlen(output->data);
-    nodeDataLen = strlen(data);
-
-    if ((currOutputLen + nodeDataLen) > (output->bufLen - 1)) {
+    if ((strlen(output->buf) + strlen(data)) > (output->bufLen - 1)) {
+        output->full = true;
         return 1;
     }
 
     while (*data) {
-        writer_fn(*data++, output->data);
+        writer_fn(*data++, output->buf);
     }
     return 0;
 }
