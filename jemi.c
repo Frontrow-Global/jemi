@@ -104,6 +104,24 @@ jemi_node_t *jemi_array(const char *key, jemi_node_t *element, ...) {
     va_end(ap);
     return root;
 }
+jemi_node_t *jemi_array_updateable(const char *key, ObjUpdate update, uint8_t length, jemi_node_t *element, ...) {
+    va_list ap;
+    jemi_node_t *root = jemi_alloc(JEMI_ARRAY);
+
+    root->key = key;
+    root->update = update;
+
+    va_start(ap, element);
+    root->children = element;
+    while (element != NULL) {
+        element->sibling = va_arg(ap, jemi_node_t *);
+        element->parent = root;
+
+        element = element->sibling;
+    }
+    va_end(ap);
+    return root;
+}
 
 jemi_node_t *jemi_object(const char *key, jemi_node_t *element, ...) {
     va_list ap;
@@ -162,6 +180,7 @@ jemi_node_t *jemi_bool(const char *key, bool boolean) {
         node = jemi_false();
     }
     node->key = key;
+    return node;
 }
 
 jemi_node_t *jemi_true(void) { return jemi_alloc(JEMI_TRUE); }
@@ -358,6 +377,21 @@ static jemi_node_t *emit_aux(jemi_node_t *node, jemi_writer_t writer_fn, jemi_ou
                 return node->children;
             }
             if (JEMI_CHILDREN_USED == node->state) {
+
+                if (node->update) {
+                    static int left = -1;
+
+                    if (left) {
+                        if (emit_string(writer_fn, output, ",")) return node;
+
+                        left = node->update(node->children);
+
+                        if (left != -1) return node->children;
+                    } else {
+                        left = -1;
+                    }
+                }
+
                 char buf[3];
                 if (node->sibling) {
                     snprintf(buf, sizeof(buf), "],");
@@ -437,7 +471,7 @@ static jemi_node_t *emit_aux(jemi_node_t *node, jemi_writer_t writer_fn, jemi_ou
         }
 
         case JEMI_STRING: {
-            char buf[22];
+            char buf[30];
 
             if (JEMI_NODE_UNUSED == node->state) {
                 if (node->key) {

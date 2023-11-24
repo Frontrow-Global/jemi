@@ -58,7 +58,6 @@ typedef enum {
     JEMI_INTEGER,
     JEMI_FLOAT,
     JEMI_STRING,
-    JEMI_BOOL,
     JEMI_TRUE, // used as the actual boolean value
     JEMI_FALSE
 } jemi_type_t;
@@ -72,9 +71,13 @@ typedef enum {
     JEMI_NODE_USED
 } jemi_state_t; // For keeping track of written and non-written nodes
 
-typedef struct _jemi_node {
-    struct _jemi_node *sibling; // any object may have siblings...
-    struct _jemi_node *parent;  // any object may have a parent object...
+
+struct jemi_node_t; // Forwared declaration
+typedef uint8_t (*ObjUpdate)(struct jemi_node_t *object);
+
+typedef struct jemi_node_t {
+    struct jemi_node_t *sibling; // any object may have siblings...
+    struct jemi_node_t *parent;  // any object may have a parent object...
     jemi_type_t type;
     jemi_state_t state;
     const char *key;
@@ -82,9 +85,11 @@ typedef struct _jemi_node {
         int integer;            // for JEMI_INTEGER
         double number;
         const char *string;          // for JEMI_STRING
-        struct _jemi_node *children; // for JEMI_ARRAY or JEMI_OBJECT
+        struct jemi_node_t *children; // for JEMI_ARRAY or JEMI_OBJECT
     };
+    ObjUpdate update;
 } jemi_node_t;
+
 
 typedef struct jemi_out_buf_t {
     char *buf;
@@ -129,6 +134,8 @@ void jemi_reset(jemi_node_t *pool, size_t pool_size);
  * `jemi_array_append()`), use the construct `jemi_array(NULL)`.
  */
 jemi_node_t *jemi_array(const char *key, jemi_node_t *element, ...);
+
+jemi_node_t *jemi_array_updateable(const char *key, ObjUpdate update, uint8_t length, jemi_node_t *element, ...);
 
 /**
  * @brief Create a JSON object with zero or more key/value sub-elements.
